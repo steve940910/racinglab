@@ -121,6 +121,8 @@ nav.tabs{overflow-x:auto}
 .rhead{font-size:12px;color:var(--muted);border-bottom:1px solid var(--line)}
 .rrow{padding:10px 24px;border-bottom:1px solid var(--bg);background:var(--row);box-shadow:inset 5px 0 0 var(--bar)}
 .rrow.dim{color:var(--muted)}
+.zz{font-size:12px;line-height:1.45;color:var(--muted);white-space:normal;margin-top:3px}
+.zz b{font-weight:600;color:var(--text)}
 .disc{width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:700;background:var(--disc);color:var(--disc-fg)}
 .disc.on{background:var(--lit);color:var(--lit-fg);box-shadow:var(--glow)}
 .tag{justify-self:start;font-family:'Barlow Condensed',sans-serif;font-size:14px;font-weight:700;letter-spacing:.06em;padding:3px 9px;border-radius:5px;background:var(--tag);color:var(--tag-fg)}
@@ -661,7 +663,8 @@ function fromDashboardJson(d, extra) {
       no: toNum(h.number), en: h.name || h.name_en || '', ch: h.name_ch || '', dmr: toNum(h.dmr_score) ?? 0,
       tir: t.val, tirWhy: t.why, rank: normRank(h.rank_prediction), style: normStyle(h.running_style),
       draw: toNum(h.barrier_draw ?? h.draw), type: h.dmr_type || '', place: toNum(h.actual_placing ?? h.actual ?? h.placing),
-      odds: toNum(h.final_odds ?? h.win_odds ?? h.odds)
+      odds: toNum(h.final_odds ?? h.win_odds ?? h.odds),
+      zz: String(h.zaozhuo || h.zz || (d.zaozhuo && d.zaozhuo[h.number]) || '').trim()
     };
   }).filter((h) => h.no != null);
   const ppi = parsePpi(info.ppi_score ?? info.ppi);
@@ -717,6 +720,22 @@ function fromWorkbook(wb) {
       const dv = {}; for (const p of POOLS) { const items = parseDividendCell(r[di(p)]); if (items.length) dv[p] = items; }
       race.dividends = Object.keys(dv).length ? dv : null;
     }
+  }
+  const zzName = wb.SheetNames.find((n) => n === '早著先機'); // 早著先機節目評語(私人研究,唔入計分)
+  if (zzName) {
+    const zr = XLSX.utils.sheet_to_json(wb.Sheets[zzName], { header: 1, raw: true, defval: null });
+    const zh = (zr[0] || []).map((x) => String(x || ''));
+    const zi = (re) => zh.findIndex((x) => re.test(x));
+    const Z = { date: zi(/日期/), race: zi(/場次/), no: zi(/馬號/), cat: zi(/類別/), note: zi(/評語/) };
+    const acc = new Map();
+    for (let i = 1; i < zr.length; i++) {
+      const r = zr[i]; const date = normDate(r[Z.date]); const no = toNum(r[Z.race]); const hno = toNum(r[Z.no]);
+      if (!date || no == null || hno == null) continue;
+      const t = String((Z.note >= 0 && r[Z.note]) || (Z.cat >= 0 && r[Z.cat]) || '').trim(); if (!t) continue;
+      const k2 = key(date, no) + '|' + hno; const a = acc.get(k2) || [];
+      if (!a.includes(t)) a.push(t); acc.set(k2, a);
+    }
+    for (const race of races.values()) for (const hh of race.horses) { const a = acc.get(key(race.date, race.no) + '|' + hh.no); if (a) hh.zz = a.join(';'); }
   }
   return races;
 }
@@ -999,7 +1018,7 @@ function renderRank(race, A, lm) {
     rows += `<div class="rgrid rrow rk-${h.rank}${h.rank === 'Low' ? ' dim' : ''}">
       <span class="num muted" style="font-size:17px;font-weight:600">${h.pos}</span>
       <span class="disc${lit ? ' on' : ''}">${h.no}</span>
-      <span style="display:flex;flex-direction:column;min-width:0"><span style="font-weight:700;display:flex;align-items:center;gap:6px">${esc(h.ch || h.en)}${lit ? `<span class="ptag">${lit.join(' ')}</span>` : ''}</span><span class="muted" style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(h.en)}</span></span>
+      <span style="display:flex;flex-direction:column;min-width:0"><span style="font-weight:700;display:flex;align-items:center;gap:6px">${esc(h.ch || h.en)}${lit ? `<span class="ptag">${lit.join(' ')}</span>` : ''}</span><span class="muted" style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(h.en)}</span>${h.zz ? `<span class="zz"><b>早著先機:</b>${esc(h.zz)}</span>` : ''}</span>
       <span class="tag">${RANK_TAG[h.rank] || h.rank}</span>
       <span style="display:flex;align-items:center;gap:10px"><span class="bar"><i style="width:${bar}%"></i></span><span class="num" style="font-size:19px;font-weight:700;width:46px;text-align:right">${h.dmr.toFixed(1)}</span></span>
       <span style="display:flex;flex-direction:column;line-height:1.25"><span class="num" style="font-size:16px;font-weight:600;color:${h.tir ? 'var(--tir)' : 'var(--faint)'}">${h.tir || h.tirWhy ? (h.tir >= 0 ? '+' : '') + h.tir.toFixed(1) : '—'}</span><span class="muted" style="font-size:12px">${esc(h.tirWhy)}</span></span>
@@ -1092,7 +1111,7 @@ function parseInput() {
     const old = S.races.get(k);
     if (old) { // 保留資料庫已有嘅賽果/賠率/奇門/派彩
       const byNo = Object.fromEntries(old.horses.map((h) => [h.no, h]));
-      race.horses.forEach((h) => { const o = byNo[h.no]; if (o) { if (h.place == null) h.place = o.place; if (h.odds == null) h.odds = o.odds; } });
+      race.horses.forEach((h) => { const o = byNo[h.no]; if (o) { if (h.place == null) h.place = o.place; if (h.odds == null) h.odds = o.odds; if (!h.zz) h.zz = o.zz; } });
       if (!race.qimen.length) race.qimen = old.qimen; race.dividends = race.dividends || old.dividends; race.going = race.going || old.going;
     }
     S.races.set(k, race);
